@@ -1,7 +1,7 @@
 import streamlit as st
 import sys
 from src.components.sidebar import render_sidebar
-from src.components.canvas import render_canvas
+from src.components.custom_canvas import render_canvas
 from src.components.node_config import render_node_config
 from src.components.test_panel import render_test_panel
 from src.services.agent_manager import AgentManager

@@ -1,30 +1,64 @@
 import os
 import json
 import uuid
+import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from src.models.node import Agent, Node, Edge, Position, NodeIO
 from src.models.node_types import NODE_TYPES, NodeType
+from src.services.database_manager import DatabaseManager
+from src.utils.config import get_config_value
+
+logger = logging.getLogger(__name__)
 
 class AgentManager:
     def __init__(self, save_dir: str = "saved_agents"):
         self.save_dir = save_dir
         os.makedirs(save_dir, exist_ok=True)
         self.agents: Dict[str, Agent] = {}
+        self.use_database = get_config_value("database.enable_persistence", True)
+        
+        # Initialize database if using persistence
+        if self.use_database:
+            DatabaseManager.initialize_database()
+            
         self._load_agents()
     
     def _load_agents(self) -> None:
-        """Load all saved agents from disk"""
-        for filename in os.listdir(self.save_dir):
-            if filename.endswith(".json"):
-                try:
-                    with open(os.path.join(self.save_dir, filename), "r") as f:
-                        agent_data = json.load(f)
-                        agent = Agent.from_dict(agent_data)
-                        self.agents[agent.id] = agent
-                except Exception as e:
-                    print(f"Error loading agent {filename}: {e}")
+        """Load all saved agents"""
+        if self.use_database:
+            try:
+                # Load from database
+                db_agents = DatabaseManager.get_all_agents()
+                for agent in db_agents:
+                    loaded_agent = DatabaseManager.load_agent(agent.id)
+                    if loaded_agent:
+                        self.agents[agent.id] = loaded_agent
+                logger.info(f"Loaded {len(self.agents)} agents from database")
+            except Exception as e:
+                logger.error(f"Error loading agents from database: {e}")
+                # Fall back to file-based loading
+                self._load_agents_from_files()
+        else:
+            # Use file-based loading
+            self._load_agents_from_files()
+    
+    def _load_agents_from_files(self) -> None:
+        """Load agents from JSON files as fallback"""
+        try:
+            for filename in os.listdir(self.save_dir):
+                if filename.endswith(".json"):
+                    try:
+                        with open(os.path.join(self.save_dir, filename), "r") as f:
+                            agent_data = json.load(f)
+                            agent = Agent.from_dict(agent_data)
+                            self.agents[agent.id] = agent
+                    except Exception as e:
+                        logger.error(f"Error loading agent {filename}: {e}")
+            logger.info(f"Loaded {len(self.agents)} agents from files")
+        except Exception as e:
+            logger.error(f"Error loading agents from files: {e}")
     
     def create_agent(self, name: str, description: Optional[str] = None) -> Agent:
         """Create a new agent with the given name and description"""
@@ -54,23 +88,55 @@ class AgentManager:
     
     def delete_agent(self, agent_id: str) -> bool:
         """Delete an agent by ID"""
-        if agent_id in self.agents:
-            del self.agents[agent_id]
-            agent_path = os.path.join(self.save_dir, f"{agent_id}.json")
-            if os.path.exists(agent_path):
+        if agent_id not in self.agents:
+            return False
+            
+        # Remove from memory
+        del self.agents[agent_id]
+        
+        # Delete from database if enabled
+        if self.use_database:
+            success = DatabaseManager.delete_agent(agent_id)
+            if not success:
+                logger.warning(f"Failed to delete agent {agent_id} from database")
+        
+        # Delete file backup
+        agent_path = os.path.join(self.save_dir, f"{agent_id}.json")
+        if os.path.exists(agent_path):
+            try:
                 os.remove(agent_path)
-            return True
-        return False
+            except Exception as e:
+                logger.error(f"Error deleting agent file: {e}")
+                
+        return True
     
     def save_agent(self, agent_id: str) -> bool:
-        """Save an agent to disk"""
+        """Save an agent"""
         agent = self.get_agent(agent_id)
-        if agent:
-            agent_path = os.path.join(self.save_dir, f"{agent_id}.json")
-            with open(agent_path, "w") as f:
-                json.dump(agent.to_dict(), f, indent=2)
-            return True
-        return False
+        if not agent:
+            return False
+            
+        success = True
+        
+        # Save to database if enabled
+        if self.use_database:
+            success = DatabaseManager.save_agent(agent)
+            if not success:
+                logger.error(f"Failed to save agent {agent.name} to database, falling back to file")
+        
+        # Save to file as backup or if database is not used
+        if not self.use_database or not success:
+            try:
+                agent_path = os.path.join(self.save_dir, f"{agent_id}.json")
+                with open(agent_path, "w") as f:
+                    json.dump(agent.to_dict(), f, indent=2)
+                success = True
+                logger.info(f"Saved agent {agent.name} to file")
+            except Exception as e:
+                logger.error(f"Error saving agent to file: {e}")
+                success = False
+                
+        return success
     
     def create_node(self, agent_id: str, node_type: str, name: str, position: Dict[str, float]) -> Optional[Node]:
         """Create a new node in the specified agent"""

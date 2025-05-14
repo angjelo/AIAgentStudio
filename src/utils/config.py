@@ -22,6 +22,10 @@ DEFAULT_CONFIG = {
             "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
             "default_model": "claude-3-opus-20240229"
         }
+    },
+    "database": {
+        "url": os.environ.get("DATABASE_URL", "postgresql://aiagent:aiagentpassword@localhost:5432/aiagent_studio"),
+        "enable_persistence": os.environ.get("ENABLE_DB_PERSISTENCE", "true").lower() == "true"
     }
 }
 
